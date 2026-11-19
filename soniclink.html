@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SonicLink — Acoustic Modem & Static Painter</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #131a22;
+      --border: #223040;
+      --accent: #00f0a0;
+      --accent2: #00b8ff;
+      --danger: #ff4d6d;
+      --text: #e2ecf5;
+      --muted: #7a8fa6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--bg);
+      color: var(--text);
+      max-width: 960px;
+      margin-inline: auto;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    h1 { margin: 0; font-size: 1.25rem; color: var(--accent); letter-spacing: 1px; }
+    .tabs { display: flex; gap: 8px; }
+    button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: 0.15s;
+    }
+    button:hover { border-color: var(--accent); }
+    button.active { background: var(--accent); color: #05120d; font-weight: bold; border-color: var(--accent); }
+    button.primary { background: var(--accent2); color: #04131c; font-weight: bold; border-color: var(--accent2); }
+    button.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card h2 {
+      margin: 0;
+      font-size: 0.95rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    textarea, pre {
+      width: 100%;
+      background: #080c10;
+      color: var(--accent);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      font-family: inherit;
+      font-size: 0.85rem;
+      resize: vertical;
+    }
+    pre {
+      margin: 0;
+      min-height: 150px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: auto;
+      line-height: 1.15;
+    }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .status {
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+    }
+    canvas.viz {
+      width: 100%;
+      height: 70px;
+      background: #06090c;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .img-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    canvas.pixel-screen {
+      width: 240px;
+      height: 240px;
+      background: #000;
+      border: 2px solid var(--border);
+      border-radius: 6px;
+      image-rendering: pixelated;
+    }
+    input[type="file"] { font-size: 0.8rem; color: var(--muted); max-width: 100%; }
+    .hidden { display: none !important; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 99px;
+      background: #1a2736;
+      color: var(--accent2);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>// SONICLINK v1</h1>
+    <div style="font-size:0.75rem;color:var(--muted)">Acoustic Data & Live Static Image Modem</div>
+  </div>
+  <div class="tabs">
+    <button id="tabDigital" class="active" onclick="setMode('digital')">1. Digital (Text / ASCII)</button>
+    <button id="tabAnalog" onclick="setMode('analog')">2. Analog (Live Static Paint)</button>
+  </div>
+</header>
+
+<!-- Live Spectrum Monitor -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="row" style="justify-content:space-between;">
+    <div class="row">
+      <button id="btnListen" class="primary" onclick="toggleMic()">Start Receiver (Mic)</button>
+      <span id="micStatus" class="badge">Mic Off</span>
+    </div>
+    <span id="freqReadout" style="font-size:0.8rem;color:var(--accent);">Peak: --- Hz</span>
+  </div>
+  <canvas id="spectrumCanvas" class="viz" width="800" height="70"></canvas>
+</div>
+
+<!-- MODE 1: DIGITAL TEXT & ASCII -->
+<div id="viewDigital" class="grid">
+  <div class="card">
+    <h2>Transmitter (TX)</h2>
+    <textarea id="txText" rows="6" placeholder="Type text or convert an image to ASCII below...">Hello via sound waves!</textarea>
+    <div class="row">
+      <label style="font-size:0.78rem;color:var(--muted);">Image &rarr; ASCII:</label>
+      <input type="file" id="asciiFile" accept="image/*" onchange="convertImageToAscii(event)" />
+    </div>
+    <div class="row">
+      <button id="btnSendText" class="primary" onclick="transmitText()">Transmit Audio</button>
+      <button onclick="document.getElementById('txText').value=''">Clear</button>
+    </div>
+    <div class="status">
+      <span id="txDigitalStatus">Idle</span>
+      <span>16-FSK (~5.5 bytes/sec)</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Receiver (RX)</h2>
+    <pre id="rxText" style="min-height:175px;">Waiting for acoustic signal...</pre>
+    <div class="row">
+      <button onclick="clearRxText()">Clear Output</button>
+    </div>
+    <div class="status">
+      <span id="rxDigitalStatus">Standby</span>
+      <span id="rxByteCount">0 bytes</span>
+    </div>
+  </div>
+</div>
+
+<!-- MODE 2: ANALOG STATIC IMAGE PAINTER -->
+<div id="viewAnalog" class="grid hidden">
+  <div class="card">
+    <h2>Analog Image Transmitter (TX)</h2>
+    <div class="img-box">
+      <canvas id="txImageCanvas" class="pixel-screen" width="40" height="40"></canvas>
+      <input type="file" id="analogFile" accept="image/*" onchange="loadAnalogImage(event)" />
+    </div>
+    <div class="row" style="justify-content:center;">
+      <button onclick="drawTestPattern()">Load Test Pattern</button>
+      <button id="btnSendAnalog" class="primary" onclick="transmitAnalogImage()">Broadcast Scanlines (~18s)</button>
+    </div>
+    <div class="status">
+      <span id="txAnalogStatus">Ready (40x40 grayscale)</span>
+      <span>1400–2800 Hz</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Live Static Canvas (RX)</h2>
+    <div class="img-box">
+      <canvas id="rxImageCanvas" class="pixel-screen" width="40" height="40"></canvas>
+    </div>
+    <div class="row" style="justify-content:center;">
+      <button onclick="resetAnalogRx()">Reset Scan Beam</button>
+    </div>
+    <div class="status">
+      <span id="rxAnalogStatus">Start Mic to see live acoustic static</span>
+      <span id="rxScanPos">Line: 0/40</span>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================================================
+   CORE AUDIO & STATE
+========================================================= */
+let audioCtx = null;
+let micStream = null;
+let analyser = null;
+let isListening = false;
+let currentMode = 'digital'; // 'digital' | 'analog'
+let animId = null;
+
+function ensureAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('tabDigital').classList.toggle('active', mode === 'digital');
+  document.getElementById('tabAnalog').classList.toggle('active', mode === 'analog');
+  document.getElementById('viewDigital').classList.toggle('hidden', mode !== 'digital');
+  document.getElementById('viewAnalog').classList.toggle('hidden', mode !== 'analog');
+
+  if (analyser) {
+    // 2048 = sharper frequency bins for FSK; 512 = faster ~10ms response for analog scanlines
+    analyser.fftSize = (mode === 'digital') ? 2048 : 512;
+  }
+}
+
+/* =========================================================
+   MICROPHONE & MAIN DSP LOOP
+========================================================= */
+async function toggleMic() {
+  if (isListening) {
+    stopMic();
+    return;
+  }
+  try {
+    const ctx = ensureAudioCtx();
+    // Critical: disable browser echo/noise filters so modem tones aren't suppressed
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    });
+    const source = ctx.createMediaStreamSource(micStream);
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = (currentMode === 'digital') ? 2048 : 512;
+    analyser.smoothingTimeConstant = 0;
+    source.connect(analyser);
+
+    isListening = true;
+    document.getElementById('btnListen').textContent = 'Stop Receiver';
+    document.getElementById('btnListen').classList.remove('primary');
+    document.getElementById('btnListen').classList.add('danger');
+    document.getElementById('micStatus').textContent = `Listening (${ctx.sampleRate} Hz)`;
+    lastAnalogTick = performance.now();
+    dspLoop();
+  } catch (err) {
+    alert('Mic access failed: ' + err.message + '\n(Make sure you are on HTTPS or localhost)');
+  }
+}
+
+function stopMic() {
+  isListening = false;
+  if (animId) cancelAnimationFrame(animId);
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  micStream = null;
+  document.getElementById('btnListen').textContent = 'Start Receiver (Mic)';
+  document.getElementById('btnListen').classList.remove('danger');
+  document.getElementById('btnListen').classList.add('primary');
+  document.getElementById('micStatus').textContent = 'Mic Off';
+}
+
+function dspLoop() {
+  if (!isListening) return;
+  const freqData = new Float32Array(analyser.frequencyBinCount);
+  analyser.getFloatFrequencyData(freqData);
+
+  drawSpectrum(freqData);
+
+  if (currentMode === 'digital') {
+    processDigitalRx(freqData);
+  } else {
+    processAnalogRx(freqData);
+  }
+  animId = requestAnimationFrame(dspLoop);
+}
+
+function drawSpectrum(freqData) {
+  const canvas = document.getElementById('spectrumCanvas');
+  const c = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  c.fillStyle = '#06090c';
+  c.fillRect(0, 0, w, h);
+
+  const sampleRate = audioCtx.sampleRate;
+  const binHz = sampleRate / analyser.fftSize;
+  const maxHz = 3600;
+  const maxBin = Math.min(freqData.length - 1, Math.floor(maxHz / binHz));
+
+  let peakBin = 0, peakVal = -Infinity;
+  c.beginPath();
+  for (let i = 1; i <= maxBin; i++) {
+    const val = freqData[i];
+    if (val > peakVal) { peakVal = val; peakBin = i; }
+    const x = (i / maxBin) * w;
+    const norm = Math.max(0, Math.min(1, (val + 100) / 80));
+    const y = h - norm * h;
+    if (i === 1) c.moveTo(x, y); else c.lineTo(x, y);
+  }
+  c.strokeStyle = currentMode === 'digital' ? '#00f0a0' : '#00b8ff';
+  c.lineWidth = 1.5;
+  c.stroke();
+
+  const peakHz = Math.round(peakBin * binHz);
+  document.getElementById('freqReadout').textContent =
+    peakVal > -80 ? `Peak: ${peakHz} Hz (${Math.round(peakVal)} dB)` : 'Peak: --- Hz';
+}
+
+/* =========================================================
+   MODE 1: DIGITAL 16-FSK + REPEAT SYMBOL (NO CLOCK DRIFT!)
+   - Symbols 0..15 : 1200 Hz .. 2700 Hz (100 Hz spacing)
+   - Symbol 16     : 2800 Hz (REPEAT previous nibble)
+   - Symbol 17     : 1000 Hz (START frame)
+   - Symbol 18     : 2900 Hz (END frame)
+========================================================= */
+const FSK_SYM_DURATION = 0.085; // 85ms per nibble
+const SYM_REPEAT = 16;
+const SYM_START  = 17;
+const SYM_END    = 18;
+
+function symbolToFreq(sym) {
+  if (sym <= 15) return 1200 + sym * 100;
+  if (sym === SYM_REPEAT) return 2800;
+  if (sym === SYM_START) return 1000;
+  if (sym === SYM_END) return 2900;
+  return 0;
+}
+
+function transmitText() {
+  const text = document.getElementById('txText').value;
+  if (!text) return;
+  const ctx = ensureAudioCtx();
+  const bytes = new TextEncoder().encode(text);
+
+  // Build symbol stream: START + nibbles (using REPEAT if adjacent nibbles match) + END
+  const symbols = [SYM_START];
+  let lastSent = SYM_START;
+
+  for (const byte of bytes) {
+    const nibbles = [(byte >> 4) & 0x0f, byte & 0x0f];
+    for (const n of nibbles) {
+      if (n === lastSent) {
+        symbols.push(SYM_REPEAT);
+        lastSent = SYM_REPEAT;
+      } else {
+        symbols.push(n);
+        lastSent = n;
+      }
+    }
+  }
+  symbols.push(SYM_END);
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  const now = ctx.currentTime + 0.05;
+  const totalDur = symbols.length * FSK_SYM_DURATION;
+
+  // Smooth fade in/out to avoid speaker clicks
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(0.6, now + 0.02);
+  gain.gain.setValueAtTime(0.6, now + totalDur - 0.02);
+  gain.gain.linearRampToValueAtTime(0.0001, now + totalDur);
+
+  symbols.forEach((sym, i) => {
+    osc.frequency.setValueAtTime(symbolToFreq(sym), now + i * FSK_SYM_DURATION);
+  });
+
+  osc.start(now);
+  osc.stop(now + totalDur + 0.02);
+
+  const btn = document.getElementById('btnSendText');
+  const status = document.getElementById('txDigitalStatus');
+  btn.disabled = true;
+  status.textContent = `Transmitting ${bytes.length} bytes (${totalDur.toFixed(1)}s)...`;
+
+  osc.onended = () => {
+    btn.disabled = false;
+    status.textContent = `Sent ${bytes.length} bytes`;
+  };
+}
+
+// Digital RX State
+let rxReceiving = false;
+let rxBytes = [];
+let rxPendingNibble = null;
+let rxLastDataNibble = 0;
+let rxLastCommittedSym = -1;
+let rxCandidateSym = -1;
+let rxCandidateCount = 0;
+
+function clearRxText() {
+  rxBytes = [];
+  rxPendingNibble = null;
+  document.getElementById('rxText').textContent = 'Waiting for acoustic signal...';
+  document.getElementById('rxByteCount').textContent = '0 bytes';
+}
+
+function processDigitalRx(freqData) {
+  const sampleRate = audioCtx.sampleRate;
+  const binHz = sampleRate / analyser.fftSize;
+
+  // Compute noise floor in 800..3200 Hz band
+  let sum = 0, count = 0;
+  const bMin = Math.floor(800 / binHz);
+  const bMax = Math.min(freqData.length - 1, Math.ceil(3200 / binHz));
+  for (let i = bMin; i <= bMax; i++) { sum += freqData[i]; count++; }
+  const noiseFloor = sum / Math.max(1, count);
+
+  // Measure energy at each of our 19 valid symbols
+  let bestSym = -1;
+  let bestDb = -Infinity;
+  for (let sym = 0; sym <= 18; sym++) {
+    const targetBin = Math.round(symbolToFreq(sym) / binHz);
+    // Check targetBin and +/- 1 neighbor for slight frequency skew
+    const db = Math.max(
+      freqData[targetBin - 1] ?? -120,
+      freqData[targetBin] ?? -120,
+      freqData[targetBin + 1] ?? -120
+    );
+    if (db > bestDb) {
+      bestDb = db;
+      bestSym = sym;
+    }
+  }
+
+  // Require strong SNR above room noise
+  if (bestDb < noiseFloor + 14 || bestDb < -68) {
+    rxCandidateCount = 0;
+    return;
+  }
+
+  // Debounce: require 2 consecutive frames (~32ms) on the same symbol
+  if (bestSym === rxCandidateSym) {
+    rxCandidateCount++;
+  } else {
+    rxCandidateSym = bestSym;
+    rxCandidateCount = 1;
+  }
+
+  if (rxCandidateCount === 2 && bestSym !== rxLastCommittedSym) {
+    rxLastCommittedSym = bestSym;
+    handleDetectedSymbol(bestSym);
+  }
+}
+
+function handleDetectedSymbol(sym) {
+  const statusEl = document.getElementById('rxDigitalStatus');
+  if (sym === SYM_START) {
+    rxReceiving = true;
+    rxBytes = [];
+    rxPendingNibble = null;
+    rxLastDataNibble = 0;
+    statusEl.textContent = 'SYNC LOCKED — Receiving...';
+    document.getElementById('rxText').textContent = '';
+    return;
+  }
+  if (sym === SYM_END) {
+    if (rxReceiving) {
+      rxReceiving = false;
+      statusEl.textContent = 'Transfer Complete';
+    }
+    return;
+  }
+  if (!rxReceiving) return;
+
+  const nibble = (sym === SYM_REPEAT) ? rxLastDataNibble : sym;
+  rxLastDataNibble = nibble;
+
+  if (rxPendingNibble === null) {
+    rxPendingNibble = nibble;
+  } else {
+    const byte = (rxPendingNibble << 4) | nibble;
+    rxPendingNibble = null;
+    rxBytes.push(byte);
+    const decoded = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(rxBytes));
+    document.getElementById('rxText').textContent = decoded;
+    document.getElementById('rxByteCount').textContent = `${rxBytes.length} bytes`;
+  }
+}
+
+/* Image-to-ASCII Converter */
+function convertImageToAscii(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    const cols = 20, rows = 10; // Compact for quick sound transfer
+    const c = document.createElement('canvas');
+    c.width = cols; c.height = rows;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, cols, rows);
+    const data = ctx.getImageData(0, 0, cols, rows).data;
+    const ramp = ' .:-=+*#%@';
+    let ascii = '';
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const idx = (y * cols + x) * 4;
+        const lum = 0.299 * data[idx] + 0.587 * data[idx+1] + 0.114 * data[idx+2];
+        ascii += ramp[Math.floor((lum / 256) * ramp.length)];
+      }
+      if (y < rows - 1) ascii += '\n';
+    }
+    document.getElementById('txText').value = ascii;
+  };
+  img.src = URL.createObjectURL(file);
+}
+
+/* =========================================================
+   MODE 2: ANALOG STATIC PAINTER (SSTV-INSPIRED)
+   - Resolution  : 40 x 40 grayscale
+   - Frame Sync  : 750 Hz  (180 ms) -> resets beam to (0,0)
+   - Line Sync   : 1000 Hz (35 ms)  -> snaps x=0, advances y
+   - Pixels      : 1400 Hz (Black) .. 2800 Hz (White), 10 ms/px
+========================================================= */
+const IMG_W = 40;
+const IMG_H = 40;
+const PX_MS = 10;
+const FREQ_FRAME_SYNC = 750;
+const FREQ_LINE_SYNC  = 1000;
+const FREQ_BLACK      = 1400;
+const FREQ_WHITE      = 2800;
+
+function drawTestPattern() {
+  const canvas = document.getElementById('txImageCanvas');
+  const c = canvas.getContext('2d');
+  // Draw high-contrast smiley + gradient bars
+  const grad = c.createLinearGradient(0, 0, IMG_W, IMG_H);
+  grad.addColorStop(0, '#111');
+  grad.addColorStop(1, '#555');
+  c.fillStyle = grad;
+  c.fillRect(0, 0, IMG_W, IMG_H);
+
+  c.strokeStyle = '#fff';
+  c.lineWidth = 2;
+  c.beginPath();
+  c.arc(20, 20, 14, 0, Math.PI * 2);
+  c.stroke();
+
+  c.fillStyle = '#fff';
+  c.fillRect(14, 14, 3, 4);
+  c.fillRect(23, 14, 3, 4);
+
+  c.beginPath();
+  c.arc(20, 21, 8, 0.15 * Math.PI, 0.85 * Math.PI);
+  c.stroke();
+}
+drawTestPattern();
+
+function loadAnalogImage(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.getElementById('txImageCanvas');
+    const c = canvas.getContext('2d');
+    c.drawImage(img, 0, 0, IMG_W, IMG_H);
+    // Convert preview to grayscale
+    const id = c.getImageData(0, 0, IMG_W, IMG_H);
+    for (let i = 0; i < id.data.length; i += 4) {
+      const lum = 0.299 * id.data[i] + 0.587 * id.data[i+1] + 0.114 * id.data[i+2];
+      id.data[i] = id.data[i+1] = id.data[i+2] = lum;
+    }
+    c.putImageData(id, 0, 0);
+  };
+  img.src = URL.createObjectURL(file);
+}
+
+function transmitAnalogImage() {
+  const ctx = ensureAudioCtx();
+  const canvas = document.getElementById('txImageCanvas');
+  const data = canvas.getContext('2d').getImageData(0, 0, IMG_W, IMG_H).data;
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  let t = ctx.currentTime + 0.05;
+  const startT = t;
+
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.linearRampToValueAtTime(0.6, t + 0.02);
+
+  // Frame Sync Pulse (resets receiver to top-left)
+  osc.frequency.setValueAtTime(FREQ_FRAME_SYNC, t);
+  t += 0.18;
+
+  for (let y = 0; y < IMG_H; y++) {
+    // Line Sync Pulse
+    osc.frequency.setValueAtTime(FREQ_LINE_SYNC, t);
+    t += 0.035;
+
+    // Scanline Pixels
+    for (let x = 0; x < IMG_W; x++) {
+      const idx = (y * IMG_W + x) * 4;
+      const lum = data[idx] / 255; // 0..1
+      const freq = FREQ_BLACK + lum * (FREQ_WHITE - FREQ_BLACK);
+      osc.frequency.setValueAtTime(freq, t);
+      t += PX_MS / 1000;
+    }
+  }
+
+  gain.gain.setValueAtTime(0.6, t - 0.02);
+  gain.gain.linearRampToValueAtTime(0.0001, t);
+  osc.start(startT);
+  osc.stop(t + 0.02);
+
+  const dur = (t - startT).toFixed(1);
+  const btn = document.getElementById('btnSendAnalog');
+  const status = document.getElementById('txAnalogStatus');
+  btn.disabled = true;
+  status.textContent = `Broadcasting scanlines (${dur}s)...`;
+  osc.onended = () => {
+    btn.disabled = false;
+    status.textContent = 'Broadcast complete';
+  };
+}
+
+// Analog RX State
+const rxCanvas = document.getElementById('rxImageCanvas');
+const rxCtx = rxCanvas.getContext('2d');
+let rxImgBuffer = rxCtx.createImageData(IMG_W, IMG_H);
+let scanX = 0;
+let scanY = 0;
+let lastAnalogTick = performance.now();
+let inFrameSync = false;
+let inLineSync = false;
+let justResetFrame = false;
+
+function resetAnalogRx() {
+  scanX = 0; scanY = 0;
+  rxImgBuffer = rxCtx.createImageData(IMG_W, IMG_H);
+  rxCtx.fillStyle = '#000';
+  rxCtx.fillRect(0, 0, IMG_W, IMG_H);
+}
+resetAnalogRx();
+
+function processAnalogRx(freqData) {
+  const now = performance.now();
+  const dt = Math.min(60, now - lastAnalogTick);
+  lastAnalogTick = now;
+
+  const sampleRate = audioCtx.sampleRate;
+  const binHz = sampleRate / analyser.fftSize;
+
+  // Check sync tones
+  const frameBin = Math.round(FREQ_FRAME_SYNC / binHz);
+  const lineBin  = Math.round(FREQ_LINE_SYNC / binHz);
+  const frameDb = Math.max(freqData[frameBin - 1] ?? -120, freqData[frameBin] ?? -120, freqData[frameBin + 1] ?? -120);
+  const lineDb  = Math.max(freqData[lineBin - 1] ?? -120,  freqData[lineBin] ?? -120,  freqData[lineBin + 1] ?? -120);
+
+  // Find peak in pixel band (1350 .. 2850 Hz)
+  const pMin = Math.floor(1350 / binHz);
+  const pMax = Math.min(freqData.length - 2, Math.ceil(2850 / binHz));
+  let bestBin = pMin, bestDb = -Infinity;
+  for (let i = pMin; i <= pMax; i++) {
+    if (freqData[i] > bestDb) { bestDb = freqData[i]; bestBin = i; }
+  }
+
+  const statusEl = document.getElementById('rxAnalogStatus');
+
+  // 1. Detect Frame Sync (750 Hz)
+  if (frameDb > -58 && frameDb > bestDb + 6 && frameDb > lineDb + 4) {
+    if (!inFrameSync) {
+      inFrameSync = true;
+      scanX = 0;
+      scanY = 0;
+      justResetFrame = true;
+      statusEl.textContent = 'FRAME SYNC LOCKED!';
+    }
+    return;
+  } else {
+    inFrameSync = false;
+  }
+
+  // 2. Detect Line Sync (1000 Hz)
+  if (lineDb > -58 && lineDb > bestDb + 5) {
+    if (!inLineSync) {
+      inLineSync = true;
+      scanX = 0;
+      if (justResetFrame) {
+        justResetFrame = false;
+      } else {
+        scanY = (scanY + 1) % IMG_H;
+      }
+      statusEl.textContent = 'Receiving Scanline...';
+    }
+    return;
+  } else {
+    inLineSync = false;
+  }
+
+  // 3. Measure Pixel Luminance (with Parabolic Interpolation for smooth shades)
+  let lum;
+  if (bestDb < -72) {
+    // Ambient silence -> render live organic static noise!
+    lum = Math.floor(Math.random() * 55);
+    statusEl.textContent = 'Listening (Ambient Static)';
+  } else {
+    const a = freqData[bestBin - 1], b = freqData[bestBin], c = freqData[bestBin + 1];
+    const denom = (a - 2 * b + c);
+    const refinedBin = denom !== 0 ? bestBin + 0.5 * (a - c) / denom : bestBin;
+    const freq = refinedBin * binHz;
+    const norm = Math.max(0, Math.min(1, (freq - FREQ_BLACK) / (FREQ_WHITE - FREQ_BLACK)));
+    lum = Math.round(norm * 255);
+  }
+
+  // Advance scan beam proportionally to elapsed time
+  const pxAdvance = dt / PX_MS;
+  const startPx = Math.floor(scanX);
+  scanX += pxAdvance;
+  const endPx = Math.floor(scanX);
+
+  for (let x = startPx; x <= endPx; x++) {
+    const drawX = x % IMG_W;
+    const drawY = (scanY + Math.floor(x / IMG_W)) % IMG_H;
+    const idx = (drawY * IMG_W + drawX) * 4;
+    rxImgBuffer.data[idx]     = lum;
+    rxImgBuffer.data[idx + 1] = lum;
+    rxImgBuffer.data[idx + 2] = lum;
+    rxImgBuffer.data[idx + 3] = 255;
+  }
+
+  if (scanX >= IMG_W) {
+    scanX = scanX % IMG_W;
+    scanY = (scanY + 1) % IMG_H;
+  }
+
+  rxCtx.putImageData(rxImgBuffer, 0, 0);
+
+  // Draw glowing scan cursor
+  rxCtx.fillStyle = '#00f0a0';
+  rxCtx.fillRect(Math.floor(scanX), scanY, 2, 1);
+  document.getElementById('rxScanPos').textContent = `Line: ${scanY + 1}/${IMG_H}`;
+}
+</script>
+</body>
+</html>
