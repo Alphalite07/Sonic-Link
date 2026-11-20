@@ -10,28 +10,56 @@
   <header>
     <div>
       <h1>// SONICLINK</h1>
-      <span class="sub">XChaCha20-Poly1305 &bull; RS(255,223) FEC &bull; FHSS &bull; RGB SSTV</span>
+      <span id="runtimeSub" class="sub">XChaCha20-Poly1305 &bull; RS(255,223) &bull; X25519 &bull; RGB SSTV</span>
     </div>
     <div class="controls">
+      <label class="toggle" title="Allow mic to hear your own speakers for solo testing">
+        <input type="checkbox" id="chkLoopback" />
+        <span>Loopback Test</span>
+      </label>
       <label class="toggle">
         <input type="checkbox" id="chkUltrasonic" />
         <span>Ultrasonic (18–19.8 kHz)</span>
       </label>
       <button id="btnMic" class="primary">Start Receiver (Mic)</button>
+      <button id="btnStopAll" class="danger">STOP ALL</button>
       <span id="micBadge" class="badge">Mic Off</span>
+      <span id="muteBadge" class="badge hidden" style="background:#4a2b08;color:#ffb703;">SELF-MUTED (TX)</span>
     </div>
   </header>
 
-  <!-- KEY VAULT BAR -->
+  <!-- KEY VAULT + X25519 QR PAIRING -->
   <section class="vault card">
     <div class="row">
-      <input id="inpPass" type="password" placeholder="Shared Passphrase (Argon2id) or 64-hex PSK..." />
+      <input id="inpPass" type="password" placeholder="Passphrase (Argon2id), 64-hex PSK, or paste Peer X25519 QR..." />
       <button id="btnDerive">Lock Passphrase</button>
-      <button id="btnGenPsk">Gen 256-bit PSK</button>
-      <button id="btnImportPsk">Import Hex PSK</button>
+      <button id="btnGenPsk">Gen PSK</button>
+      <button id="btnImportPsk">Import PSK</button>
+      <button id="btnOpenQr" class="primary">X25519 QR Pair</button>
       <span id="keyFp" class="badge green">KEY: DEFAULT</span>
     </div>
     <div id="pskDisplay" class="psk hidden"></div>
+
+    <!-- Collapsible X25519 QR Pairing Drawer -->
+    <div id="qrDrawer" class="grid hidden" style="margin-top:8px;border-top:1px solid var(--border);padding-top:12px;">
+      <div class="center" style="display:flex;flex-direction:column;gap:8px;">
+        <h2>1. Your Ephemeral X25519 QR</h2>
+        <canvas id="myQrCanvas" style="background:#fff;padding:6px;border-radius:8px;"></canvas>
+        <div class="row">
+          <button id="btnNewX25519">Rotate Keypair</button>
+          <button id="btnCopyMyQr">Copy PubKey</button>
+        </div>
+      </div>
+      <div class="center" style="display:flex;flex-direction:column;gap:8px;">
+        <h2>2. Scan Peer's QR (or Paste)</h2>
+        <video id="qrVideo" playsinline style="width:200px;height:200px;object-fit:cover;border-radius:8px;background:#000;border:1px solid var(--border);"></video>
+        <div class="row">
+          <button id="btnStartScan" class="primary">Start Camera Scan</button>
+          <button id="btnPairPasted">Pair From Input Box</button>
+        </div>
+        <span id="qrStatus" class="sub">Both phones scan each other &rarr; instant 256-bit ECDH key!</span>
+      </div>
+    </div>
   </section>
 
   <!-- MODE TABS -->
@@ -77,6 +105,7 @@
     <div class="card center">
       <h2>Live Color Static RX</h2>
       <canvas id="rxRgbCanvas" class="pixel-screen" width="48" height="48"></canvas>
+      <button id="btnClearRgb">Clear Static Screen</button>
       <span id="rxRgbStatus" class="sub">Without the key, this stays pure rainbow static</span>
     </div>
   </main>

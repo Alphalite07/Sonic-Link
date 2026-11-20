@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/soniclink-core",
+  "crates/soniclink-wasm",
+  "src-tauri",
+]

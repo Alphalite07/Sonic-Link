@@ -118,3 +118,69 @@ impl CryptoScrambler {
         order
     }
 }
+
+use hkdf::Hkdf;
+use sha2::{Digest, Sha256};
+use x25519_dalek::{PublicKey, StaticSecret};
+
+pub const QR_PREFIX: &str = "soniclink://x25519/";
+
+/// Ephemeral X25519 pairing session (secret automatically zeroized on drop).
+pub struct KeyExchangeSession {
+    secret: StaticSecret,
+    public: PublicKey,
+}
+
+impl KeyExchangeSession {
+    pub fn new() -> Self {
+        let secret = StaticSecret::random_from_rng(OsRng);
+        let public = PublicKey::from(&secret);
+        Self { secret, public }
+    }
+
+    /// Returns QR-ready payload: "soniclink://x25519/<64-hex-chars>"
+    pub fn qr_payload(&self) -> String {
+        format!("{QR_PREFIX}{}", hex::encode(self.public.as_bytes()))
+    }
+
+    /// Completes X25519 ECDH + HKDF-SHA256 using the scanned peer QR / hex public key.
+    /// Binds both public keys into the HKDF salt so Alice & Bob always derive the exact
+    /// same 256-bit MasterKey and matching 8-char visual verification code.
+    pub fn derive_session_key(&self, peer_input: &str) -> Result<(MasterKey, String), CryptoError> {
+        let cleaned = peer_input.trim().strip_prefix(QR_PREFIX).unwrap_or(peer_input.trim());
+        let peer_bytes = hex::decode(cleaned).map_err(|_| CryptoError::KdfFailed)?;
+        let peer_arr: [u8; 32] = peer_bytes.try_into().map_err(|_| CryptoError::KdfFailed)?;
+        let peer_pub = PublicKey::from(peer_arr);
+
+        let shared = self.secret.diffie_hellman(&peer_pub);
+
+        // Order-independent salt = min(pubA, pubB) || max(pubA, pubB)
+        let my_bytes = self.public.as_bytes();
+        let mut salt = [0u8; 64];
+        if my_bytes <= &peer_arr {
+            salt[..32].copy_from_slice(my_bytes);
+            salt[32..].copy_from_slice(&peer_arr);
+        } else {
+            salt[..32].copy_from_slice(&peer_arr);
+            salt[32..].copy_from_slice(my_bytes);
+        }
+
+        let hk = Hkdf::<Sha256>::new(Some(&salt), shared.as_bytes());
+        let mut okm = [0u8; 32];
+        hk.expand(b"SONICLINK-X25519-SESSION-V1", &mut okm)
+            .map_err(|_| CryptoError::KdfFailed)?;
+
+        let master = MasterKey::from_raw(okm);
+        let code = master.safety_fingerprint();
+        Ok((master, code))
+    }
+}
+
+impl MasterKey {
+    /// Short human-verifiable fingerprint (SHA-256 hash — never leaks raw key bytes).
+    pub fn safety_fingerprint(&self) -> String {
+        let hash = Sha256::digest(self.as_bytes());
+        let h = hex::encode(&hash[..4]).to_uppercase();
+        format!("{}-{}", &h[..4], &h[4..8])
+    }
+}

@@ -11,10 +11,12 @@ use tauri::{AppHandle, Emitter};
 
 pub enum AudioCommand {
     PlayPcm(Vec<f32>),
+    StopTx,
     StartMic,
     StopMic,
     SetBand(AudioBand),
     SetMode(RxMode),
+    SetLoopback(bool),
     UpdateKey(MasterKey),
 }
 
@@ -56,24 +58,24 @@ impl AudioEngineHandle {
 fn run_audio_thread(app: AppHandle, cmd_rx: mpsc::Receiver<AudioCommand>, initial_key: MasterKey) {
     let host = cpal::default_host();
 
-    // Shared playback FIFO queue
     let play_queue: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
     let _out_stream = start_output_stream(&host, play_queue.clone());
 
-    // Shared DSP receiver state
     let shared_key = Arc::new(Mutex::new(initial_key));
     let shared_band = Arc::new(Mutex::new(AudioBand::Audible));
     let shared_mode = Arc::new(Mutex::new(RxMode::Digital));
     let mut in_stream: Option<cpal::Stream> = None;
 
-    // Channel from mic callback -> DSP processor
     let (mic_tx, mic_rx) = mpsc::channel::<Vec<f32>>();
     let mut fsk_rx: Option<FskReceiver> = None;
     let mut rgb_rx: Option<RgbSstvReceiver> = None;
     let mut last_rgb_emit = Instant::now();
 
+    let mut loopback_mode = false;
+    let mut last_tx_active: Option<Instant> = None;
+    let mut was_self_muted = false;
+
     loop {
-        // 1. Handle UI/IPC commands
         while let Ok(cmd) = cmd_rx.try_recv() {
             match cmd {
                 AudioCommand::PlayPcm(samples) => {
@@ -89,6 +91,9 @@ fn run_audio_thread(app: AppHandle, cmd_rx: mpsc::Receiver<AudioCommand>, initia
                 }
                 AudioCommand::SetMode(m) => {
                     *shared_mode.lock().unwrap() = m;
+                }
+                AudioCommand::SetLoopback(enabled) => {
+                    loopback_mode = enabled;
                 }
                 AudioCommand::UpdateKey(k) => {
                     *shared_key.lock().unwrap() = k;
@@ -107,19 +112,47 @@ fn run_audio_thread(app: AppHandle, cmd_rx: mpsc::Receiver<AudioCommand>, initia
                         }
                     }
                 }
+                AudioCommand::StopTx => {
+                    if let Ok(mut q) = play_queue.lock() {
+                        q.clear();
+                    }
+                    last_tx_active = None;
+                    was_self_muted = false;
+                    let _ = app.emit("tx-mute-state", false);
+                }
                 AudioCommand::StopMic => {
                     in_stream = None;
+                    while mic_rx.try_recv().is_ok() {} // flush any buffered mic static
                     let _ = app.emit("mic-status", "Mic Off");
                 }
             }
         }
 
-        // 2. Process incoming mic PCM buffers
+        // Acoustic Echo Self-Mute: pause mic while TX is playing + 320ms room reverb tail
+        let tx_active = !play_queue.lock().unwrap().is_empty();
+        if tx_active {
+            last_tx_active = Some(Instant::now());
+        }
+        let self_muted = !loopback_mode
+            && last_tx_active.map_or(false, |t| t.elapsed() < Duration::from_millis(320));
+
+        if self_muted != was_self_muted {
+            was_self_muted = self_muted;
+            let _ = app.emit("tx-mute-state", self_muted);
+            if self_muted {
+                if let Some(fsk) = fsk_rx.as_mut() {
+                    fsk.reset_sync();
+                }
+            }
+        }
+
         while let Ok(mono_samples) = mic_rx.try_recv() {
+            if self_muted {
+                continue;
+            }
             let key = shared_key.lock().unwrap().clone();
             let mode = *shared_mode.lock().unwrap();
 
-            // Always run FSK RX so encrypted text, drawing bursts, and RGB frame nonces decode seamlessly!
             if let Some(fsk) = fsk_rx.as_mut() {
                 for res in fsk.push_samples(&mono_samples, &key) {
                     match res {
@@ -142,7 +175,6 @@ fn run_audio_thread(app: AppHandle, cmd_rx: mpsc::Receiver<AudioCommand>, initia
                 }
             }
 
-            // In Analog RGB mode, also drive the real-time static & color scanline painter
             if mode == RxMode::AnalogRgb {
                 if let Some(rgb) = rgb_rx.as_mut() {
                     if rgb.push_samples(&mono_samples) && last_rgb_emit.elapsed() >= Duration::from_millis(50) {

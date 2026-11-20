@@ -1,0 +1,40 @@
+# Rust / Cargo build outputs (huge!)
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+# Node / Vite / PWA build outputs
+node_modules/
+dist/
+dist-ssr/
+dev-dist/
+*.local
+
+# Generated WASM bundle (rebuilt via wasm-pack)
+src/wasm-pkg/
+
+# Tauri mobile build outputs
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/.gradle/
+src-tauri/gen/apple/build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# Environment & Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS & Editor junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/

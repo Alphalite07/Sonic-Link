@@ -1,0 +1,93 @@
+================================================================================
+SONICLINK — COMPLETE COMMAND REFERENCE
+Project Root: X:\Git_Work\Sonic Link\soniclink
+================================================================================
+
+--------------------------------------------------------------------------------
+1. ONE-TIME TOOLCHAIN & DEPENDENCY SETUP
+--------------------------------------------------------------------------------
+# Install Node dependencies (frontend + QR + PWA plugin)
+npm install
+npm install qrcode jsqr
+npm install -D @types/qrcode vite-plugin-pwa
+
+# Install Rust WASM target and wasm-pack (for Browser / Android PWA mode)
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+
+# (Optional) Install Cloudflare Tunnel for instant HTTPS access on Android
+winget install Cloudflare.cloudflared
+
+
+--------------------------------------------------------------------------------
+2. BUILD WASM ENGINE (Run after any edit inside crates/soniclink-core or wasm)
+--------------------------------------------------------------------------------
+wasm-pack build crates/soniclink-wasm --target web --out-dir ../../src/wasm-pkg
+
+
+--------------------------------------------------------------------------------
+3. RUN NATIVE DESKTOP APP ON PC (Tauri v2 + Native cpal Audio)
+--------------------------------------------------------------------------------
+npm run tauri dev
+
+# Build standalone Windows installer / .exe for release
+npm run tauri build
+
+
+--------------------------------------------------------------------------------
+4. USE ON ANDROID / OTHER DEVICES VIA YOUR PC (NO APK REQUIRED)
+--------------------------------------------------------------------------------
+# OPTION A: Trusted HTTPS Tunnel (Works on Wi-Fi or Mobile Data + Camera/Mic)
+# Step 1: Keep "npm run tauri dev" (or "npm run dev") running in Terminal 1.
+# Step 2: Open Terminal 2 and run:
+cloudflared tunnel --url http://localhost:1420
+# Open the printed https://*.trycloudflare.com link in Chrome on Android.
+
+# OPTION B: 100% Local Wi-Fi Only (Self-Signed HTTPS, No Internet Needed)
+# One-time install:
+npm install -D @vitejs/plugin-basic-ssl
+# Run local HTTPS dev server on port 1421 (while Tauri runs on 1420):
+$env:HTTPS="true"; npx vite --host --port 1421
+# Open the printed https://<YOUR-PC-IP>:1421 link on Android Chrome.
+
+
+--------------------------------------------------------------------------------
+5. BUILD & INSTALL AS AN OFFLINE PWA (Works even after PC is turned off)
+--------------------------------------------------------------------------------
+# 1. Rebuild WASM + Production PWA bundle (creates dist/ + Service Worker)
+wasm-pack build crates/soniclink-wasm --target web --out-dir ../../src/wasm-pkg
+npm run build
+
+# 2. Preview production PWA locally
+npm run preview
+
+# 3. Tunnel the production PWA so Android can install it to Home Screen:
+cloudflared tunnel --url http://localhost:4173
+# On Android Chrome: Open URL -> Tap 3-dots menu -> "Install app"
+
+
+--------------------------------------------------------------------------------
+6. OPTIONAL: NATIVE ANDROID / iOS APK & IPA BUILDS (Requires Android Studio/Xcode)
+--------------------------------------------------------------------------------
+# Android
+npm run tauri android init
+npm run tauri android dev
+npm run tauri android build
+
+# iOS (macOS + Xcode only)
+npm run tauri ios init
+npm run tauri ios dev
+npm run tauri ios build
+
+
+--------------------------------------------------------------------------------
+7. DIAGNOSTICS & TESTING
+--------------------------------------------------------------------------------
+# Check Rust workspace compiles cleanly
+cargo check --workspace
+
+# Run Rust unit tests across core & crates
+cargo test --workspace
+
+# Run Vite frontend dev server only (without launching Tauri desktop window)
+npm run dev

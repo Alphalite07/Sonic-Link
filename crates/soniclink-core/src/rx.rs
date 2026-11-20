@@ -61,6 +61,15 @@ impl FskReceiver {
         self.receiving = false;
     }
 
+    pub fn reset_sync(&mut self) {
+        self.receiving = false;
+        self.raw_bytes.clear();
+        self.pending_nibble = None;
+        self.candidate_sym = None;
+        self.candidate_hits = 0;
+        self.last_committed_sym = None;
+    }
+
     /// Feed mono PCM mic samples. Returns any fully verified & decrypted packets.
     pub fn push_samples(&mut self, samples: &[f32], key: &MasterKey) -> Vec<Result<DecodedPacket, String>> {
         self.buf.extend_from_slice(samples);

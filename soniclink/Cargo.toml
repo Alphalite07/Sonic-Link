@@ -1,8 +1,0 @@
-[dependencies]
-tauri = { version = "2", features = [] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-cpal = "0.15"
-rand = "0.8"
-hex = "0.4"
-soniclink-core = { path = "../crates/soniclink-core" }
