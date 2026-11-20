@@ -26,6 +26,7 @@ export class SonicBackend {
   private micStream: MediaStream | null = null;
   private micSource: MediaStreamAudioSourceNode | null = null;
   private workletNode: AudioWorkletNode | null = null;
+  private silentGain: GainNode | null = null;
   private activeSources: AudioBufferSourceNode[] = [];
   private wasm: any = null;
 
@@ -159,6 +160,10 @@ export class SonicBackend {
   }
 
   private cleanupWebMic() {
+    if (this.silentGain) {
+    this.silentGain.disconnect();
+    this.silentGain = null;
+    }
     if (this.workletNode) {
       this.workletNode.port.onmessage = null;
       this.workletNode.disconnect();
@@ -240,7 +245,11 @@ export class SonicBackend {
       }
     };
 
+    this.silentGain = ctx.createGain();
+    this.silentGain.gain.value = 0;
     this.micSource.connect(this.workletNode);
+    this.workletNode.connect(this.silentGain);
+    this.silentGain.connect(ctx.destination);
     this.cb.onMicStatus(`PWA Listening (${ctx.sampleRate} Hz)`);
 
     this.rgbTimer = window.setInterval(() => {

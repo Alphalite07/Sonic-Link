@@ -1,30 +1,27 @@
-use crate::crypto::{decrypt_packet, CryptoScrambler, MasterKey};
+use crate::crypto::{decrypt_packet, MasterKey};
 use crate::drawing::StrokePoint;
 use crate::fec::fec_decode;
-use crate::modem::{goertzel_power, AudioBand, SYM_END, SYM_REPEAT, SYM_START};
+use crate::modem::{goertzel_power, keyed_hop_table, AudioBand, SYM_END, SYM_REPEAT, SYM_START};
 use crate::sstv_rgb::{
     RgbScramblePlan, FREQ_BLACK, FREQ_FRAME_SYNC, FREQ_LINE_SYNC, FREQ_WHITE, RGB_HEIGHT, RGB_WIDTH,
 };
 
 pub const FHSS_HOP_NONCE: [u8; 12] = *b"SONICFHSS001";
 
-/// Unified encrypted digital packet types:
-/// [0x01 || utf8_bytes]       -> Text or ASCII art
-/// [0x02 || packed_strokes]   -> Live drawing pad micro-burst
-/// [0x03 || 12-byte nonce]    -> Encrypted key-sync for upcoming Color RGB SSTV frame
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DecodedPacket {
     Text(String),
     DrawingStrokes(Vec<StrokePoint>),
     RgbFrameNonce([u8; 12]),
 }
 
-/// Stateful Goertzel-based FHSS-FSK + Reed-Solomon + XChaCha20-Poly1305 receiver.
+/// Stateful 50%-overlapping Goertzel FSK + Reed-Solomon + XChaCha20-Poly1305 receiver.
 pub struct FskReceiver {
     sample_rate: u32,
     band: AudioBand,
     buf: Vec<f32>,
     window_size: usize,
+    hop_size: usize,
 
     receiving: bool,
     raw_bytes: Vec<u8>,
@@ -33,18 +30,19 @@ pub struct FskReceiver {
     last_committed_sym: Option<usize>,
     candidate_sym: Option<usize>,
     candidate_hits: u8,
-    scrambler: Option<CryptoScrambler>,
+    silence_hops: u32,
 }
 
 impl FskReceiver {
     pub fn new(sample_rate: u32, band: AudioBand) -> Self {
-        // ~20ms Goertzel analysis window (fits 3+ windows inside each 60-75ms symbol)
-        let window_size = (0.020 * sample_rate as f32) as usize;
+        let window_size = (0.020 * sample_rate as f32) as usize; // 20ms analysis window
+        let hop_size = (window_size / 2).max(1);                 // 10ms sliding hop (50% overlap)
         Self {
             sample_rate,
             band,
             buf: Vec::with_capacity(window_size * 2),
             window_size,
+            hop_size,
             receiving: false,
             raw_bytes: Vec::new(),
             pending_nibble: None,
@@ -52,13 +50,13 @@ impl FskReceiver {
             last_committed_sym: None,
             candidate_sym: None,
             candidate_hits: 0,
-            scrambler: None,
+            silence_hops: 0,
         }
     }
 
     pub fn set_band(&mut self, band: AudioBand) {
         self.band = band;
-        self.receiving = false;
+        self.reset_sync();
     }
 
     pub fn reset_sync(&mut self) {
@@ -68,16 +66,17 @@ impl FskReceiver {
         self.candidate_sym = None;
         self.candidate_hits = 0;
         self.last_committed_sym = None;
+        self.silence_hops = 0;
     }
 
-    /// Feed mono PCM mic samples. Returns any fully verified & decrypted packets.
     pub fn push_samples(&mut self, samples: &[f32], key: &MasterKey) -> Vec<Result<DecodedPacket, String>> {
         self.buf.extend_from_slice(samples);
         let mut results = Vec::new();
 
         while self.buf.len() >= self.window_size {
-            let chunk: Vec<f32> = self.buf.drain(..self.window_size).collect();
-            if let Some(res) = self.process_window(&chunk, key) {
+            let window: Vec<f32> = self.buf[..self.window_size].to_vec();
+            self.buf.drain(..self.hop_size);
+            if let Some(res) = self.process_window(&window, key) {
                 results.push(res);
             }
         }
@@ -102,14 +101,20 @@ impl FskReceiver {
             }
         }
 
-        // Require clear SNR peak over average band energy
+        // Scale-invariant SNR check (works for both quiet and loud microphones)
         let avg_power = (total_power - best_power) / 18.0;
-        if best_power < 1e-5 || best_power < avg_power * 8.0 {
+        if best_power < 1e-7 || best_power < avg_power * 5.0 {
             self.candidate_hits = 0;
+            self.silence_hops = self.silence_hops.saturating_add(1);
+            // Reset last committed slot after 300ms of silence so back-to-back retries always lock
+            if self.silence_hops >= 30 {
+                self.last_committed_sym = None;
+            }
             return None;
         }
+        self.silence_hops = 0;
 
-        // 2-window debounce (~40ms steady tone)
+        // 3 consecutive overlapping 10ms hops (~30ms steady tone) -> rock-solid debounce
         if self.candidate_sym == Some(best_slot) {
             self.candidate_hits = self.candidate_hits.saturating_add(1);
         } else {
@@ -117,7 +122,7 @@ impl FskReceiver {
             self.candidate_hits = 1;
         }
 
-        if self.candidate_hits == 2 && self.last_committed_sym != Some(best_slot) {
+        if self.candidate_hits == 3 && self.last_committed_sym != Some(best_slot) {
             self.last_committed_sym = Some(best_slot);
             return self.on_slot(best_slot, key);
         }
@@ -130,7 +135,6 @@ impl FskReceiver {
             self.raw_bytes.clear();
             self.pending_nibble = None;
             self.last_data_nibble = 0;
-            self.scrambler = Some(CryptoScrambler::new(key, &FHSS_HOP_NONCE));
             return None;
         }
 
@@ -150,9 +154,7 @@ impl FskReceiver {
         let nibble = if slot == SYM_REPEAT {
             self.last_data_nibble
         } else if slot < 16 {
-            // Invert the keyed frequency-hop permutation for this step
-            let scrambler = self.scrambler.as_mut()?;
-            let hop_table = scrambler.permutation(16);
+            let hop_table = keyed_hop_table(key, &FHSS_HOP_NONCE);
             let sym = hop_table.iter().position(|&mapped| mapped == slot)? as u8;
             self.last_data_nibble = sym;
             sym
@@ -171,17 +173,14 @@ impl FskReceiver {
     }
 
     fn decode_and_decrypt(fec_payload: &[u8], key: &MasterKey) -> Result<DecodedPacket, String> {
-        let encrypted = fec_decode(fec_payload).map_err(|e| format!("FEC failed: {e}"))?;
+        let encrypted = fec_decode(fec_payload).map_err(|e| format!("FEC failed ({} raw bytes): {e}", fec_payload.len()))?;
         let plaintext = decrypt_packet(key, &encrypted).map_err(|e| format!("Crypto failed: {e}"))?;
 
         if plaintext.is_empty() {
             return Err("Empty packet".into());
         }
         match plaintext[0] {
-            0x01 => {
-                let text = String::from_utf8_lossy(&plaintext[1..]).to_string();
-                Ok(DecodedPacket::Text(text))
-            }
+            0x01 => Ok(DecodedPacket::Text(String::from_utf8_lossy(&plaintext[1..]).to_string())),
             0x02 => {
                 let mut pts = Vec::new();
                 for chunk in plaintext[1..].chunks_exact(3) {
@@ -200,17 +199,15 @@ impl FskReceiver {
 }
 
 /// Stateful Encrypted RGB SSTV Receiver.
-/// Continuously paints ambient acoustic static; when armed with a decrypted frame nonce
-/// and locked onto 750Hz/1000Hz sync tones, unscrambles full-color pixels in real time!
 pub struct RgbSstvReceiver {
     sample_rate: u32,
     px_samples: usize,
     buf: Vec<f32>,
 
-    pub canvas_rgb: Vec<u8>, // 48 * 48 * 3
+    pub canvas_rgb: Vec<u8>,
     plan: RgbScramblePlan,
     tx_row: usize,
-    sub_col: usize, // 0 .. (RGB_WIDTH * 3)
+    sub_col: usize,
     in_frame_sync: bool,
     in_line_sync: bool,
     just_reset_frame: bool,
@@ -219,13 +216,12 @@ pub struct RgbSstvReceiver {
 
 impl RgbSstvReceiver {
     pub fn new(sample_rate: u32, key: &MasterKey) -> Self {
-        let px_samples = (0.006 * sample_rate as f32) as usize; // matches 6ms TX sub-pixel
+        let px_samples = (0.006 * sample_rate as f32) as usize;
         Self {
             sample_rate,
             px_samples,
             buf: Vec::with_capacity(px_samples * 2),
             canvas_rgb: vec![0u8; RGB_WIDTH * RGB_HEIGHT * 3],
-            // Default dummy plan until an encrypted 0x03 nonce arrives
             plan: RgbScramblePlan::generate(key, &[0u8; 12]),
             tx_row: 0,
             sub_col: 0,
@@ -242,7 +238,6 @@ impl RgbSstvReceiver {
         self.sub_col = 0;
     }
 
-    /// Processes mic PCM and returns `true` whenever pixels updated.
     pub fn push_samples(&mut self, samples: &[f32]) -> bool {
         self.buf.extend_from_slice(samples);
         let mut updated = false;
@@ -266,7 +261,6 @@ impl RgbSstvReceiver {
         let p_frame = goertzel_power(chunk, FREQ_FRAME_SYNC, self.sample_rate);
         let p_line = goertzel_power(chunk, FREQ_LINE_SYNC, self.sample_rate);
 
-        // Scan 1400..2800 Hz in 50 Hz steps (29 bins) with parabolic peak refinement
         let mut powers = [0.0f32; 29];
         let mut best_i = 0usize;
         let mut best_p = 0.0f32;
@@ -281,8 +275,7 @@ impl RgbSstvReceiver {
             }
         }
 
-        // 1. Frame Sync (750 Hz)
-        if p_frame > 1e-4 && p_frame > best_p * 3.0 && p_frame > p_line * 2.0 {
+        if p_frame > 1e-6 && p_frame > best_p * 2.5 && p_frame > p_line * 1.8 {
             if !self.in_frame_sync {
                 self.in_frame_sync = true;
                 self.tx_row = 0;
@@ -294,8 +287,7 @@ impl RgbSstvReceiver {
             self.in_frame_sync = false;
         }
 
-        // 2. Line Sync (1000 Hz)
-        if p_line > 1e-4 && p_line > best_p * 3.0 {
+        if p_line > 1e-6 && p_line > best_p * 2.5 {
             if !self.in_line_sync {
                 self.in_line_sync = true;
                 self.sub_col = 0;
@@ -310,8 +302,7 @@ impl RgbSstvReceiver {
             self.in_line_sync = false;
         }
 
-        // 3. Measure pixel brightness (or render organic acoustic static if silent)
-        let norm_val: f32 = if best_p < 2e-5 {
+        let norm_val: f32 = if best_p < 1e-7 {
             (self.fast_rand_u8() as f32 / 255.0) * 0.35
         } else {
             let refined_i = if best_i > 0 && best_i < 28 {
@@ -331,7 +322,6 @@ impl RgbSstvReceiver {
             ((freq - FREQ_BLACK) / (FREQ_WHITE - FREQ_BLACK)).clamp(0.0, 1.0)
         };
 
-        // 4. Unscramble (row, channel, pixel X, and polarity) using secret plan
         let row_idx = self.tx_row % RGB_HEIGHT;
         let sub_idx = self.sub_col % (RGB_WIDTH * 3);
         let ch_slot = sub_idx / RGB_WIDTH;
@@ -343,14 +333,45 @@ impl RgbSstvReceiver {
         let inverted = self.plan.invert_mask[row_idx][sub_idx];
 
         let unscrambled = if inverted { 1.0 - norm_val } else { norm_val };
-        let byte_val = (unscrambled.clamp(0.0, 1.0) * 255.0) as u8;
-
-        self.canvas_rgb[(actual_y * RGB_WIDTH + actual_x) * 3 + actual_c] = byte_val;
+        self.canvas_rgb[(actual_y * RGB_WIDTH + actual_x) * 3 + actual_c] =
+            (unscrambled.clamp(0.0, 1.0) * 255.0) as u8;
 
         self.sub_col += 1;
         if self.sub_col >= RGB_WIDTH * 3 {
             self.sub_col = 0;
             self.tx_row = (self.tx_row + 1) % RGB_HEIGHT;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::encrypt_packet;
+    use crate::fec::fec_encode;
+    use crate::modem::modulate_fsk;
+
+    #[test]
+    fn roundtrip_quiet_mic_with_noise() {
+        let key = MasterKey::from_passphrase("TEST-KEY", b"SALT123456789012").unwrap();
+        let mut payload = vec![0x01];
+        payload.extend_from_slice(b"Hello SonicLink Military Acoustic Link!");
+
+        let enc = encrypt_packet(&key, &payload).unwrap();
+        let fec = fec_encode(&enc).unwrap();
+        let mut pcm = modulate_fsk(&fec, &key, &FHSS_HOP_NONCE, AudioBand::Audible, 48000);
+
+        // Simulate quiet phone mic (2% volume!) + leading silence
+        let mut noisy = vec![0.0f32; 4800];
+        noisy.extend(pcm.drain(..).map(|s| s * 0.02));
+        noisy.extend(vec![0.0f32; 4800]);
+
+        let mut rx = FskReceiver::new(48000, AudioBand::Audible);
+        let decoded = rx.push_samples(&noisy, &key);
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded[0].as_ref().unwrap(),
+            &DecodedPacket::Text("Hello SonicLink Military Acoustic Link!".into())
+        );
     }
 }
