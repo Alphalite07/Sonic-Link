@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StrokePoint {
     pub x: u8,         // 0..255 normalized canvas X
     pub y: u8,         // 0..255 normalized canvas Y
